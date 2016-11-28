@@ -1,9 +1,8 @@
-/* An app will go here */
 const express = require('express');
 const app = express();
 const pgp = require('pg-promise')();
-const PORT = ENV['PORT'] || 9001;
-const bcrypt = requre('bcrypt-as-promised');
+const PORT = process.env['PORT'] || 9001;
+const bcrypt = require('bcrypt-as-promised');
 const db = pgp('postgres://stavro510@localhost:5432/cs-server_development');
 
 const invalid = {
@@ -13,6 +12,10 @@ const invalid = {
 const valid = {
   error: false,
   message: "Success",
+};
+const noRecord = {
+  error: true,
+  message: "No record found,",
 };
 
 function getData(body) {
@@ -30,7 +33,7 @@ app.post('/login', (req, res)  => {
   .then( user => {
     bcrypt.compare(password, user.password_digest)
     .catch( error => res.json(invalid) )
-    .then( match => res.json({ ...valid, data: user }) );
+    .then( match => res.json(Object.assign({}, valid, { data: user })) );
   });
 });
 
@@ -41,94 +44,87 @@ app.post('/signup', (req, res) => {
   .then( hashed => {
     db.one('INSERT INTO users(username,password_digest) VALUES ($1,$2) RETURNING *;',[username, hashed])
     .catch( error => res.json(invalid) )
-    .then( user => res.json({ ...valid, data: user }))
+    .then( user => res.json(Object.assign({}, valid, { data: user })))
   })
 });
 
 app.get('/user/:id', (req, res) => {
   let userId = req.params.id;
   db.many('SELECT * FROM binaries WHERE user_id = $1', [userId])
-  .catch( error => res.json({ ...invalid, message: "You haven't asked for any help yet!" }) )
-  .then( data => res.json(data) );
-});
-
-app.get('/', (req, res) => {
-  db.many('SELECT * FROM binaries WHERE expiration >= $1', [Math.floor(Date.now() / 1000)])
-  .catch( error => res.json([]))
+  .catch( error => res.json(Object.assign({}, invalid, { message: "You haven't asked for any help yet!" })) )
   .then( data => res.json(data) );
 });
 
 app.get('/binaries/:id', (req, res) => {
   db.one('SELECT * FROM binaries WHERE id = $1', [req.params.id])
-  .catch( error => res.json({}))
+  .catch( error => res.json(noRecord))
   .then( data => res.json(data) );
 });
 
 app.patch('/binaries/:id', (req, res) => {
   db.one('SELECT * FROM binaries WHERE id = $1', [req.params.id])
-  .catch( error => res.json({}))
+  .catch( error => res.json(noRecord))
   .then( data => {
     if (data.expiration > Math.floor(Date.now() / 1000)) {
       db.one('SELECT * FROM votes WHERE binary_id = $1 AND user_id = $2',[req.params.id, req.body.user_id])
-      .catch( error => {
-        db.one('UPDATE binaries ')
+      .catch( noVote => {
+        let column = req.body.choice == 1 ? "votesA" : "votesB";
+        db.one('UPDATE binaries SET $1 = $2 + 1 WHERE id = $3 RETURNING *', [column, column, req.params.id])
+        .then( updated => {
+          db.none('INSERT INTO votes(binary_id, user_id, value) VALUES($1, $2, $3)', [req.params.id, req.body.user_id, parseInt(req.body.choice,10)])
+          .then( completed => res.json(updated) )
+          .catch( error => res.json(invalid) );
+        })
+        .catch( error => res.json(invalid) );
       })
-      .then( exists => res.json({ ...invalid, message: "Can't vote twice!" }) );
+      .then( exists => res.json(Object.assign({}, invalid, { message: "Can't vote twice!" })) );
     } else {
-      res.json({ ...invalid, message: message: "Sorry, voting for this decision has expired" });
+      res.json(Object.assign({},invalid,{ message: "Sorry, voting for this decision has expired" }));
     }
   })
 });
 
-//   def update
-//     @params = JSON.load request.body
-//     @binary = Binary.find(params[:id])
-//     if (@binary.expiration > Time.now.to_i)
-//       @vote = @binary.votes.find_by_user_id(@params["user_id"])
-//       if @vote.nil?
-//         @choice = @params["choice"]
-//         @binary.votes.create({
-//           user_id: @params["user_id"],
-//           value: @choice
-//         })
-//         @binary.votesA += 1 if @choice == 1
-//         @binary.votesB += 1 if @choice == 2
-//         @binary.save
-//         render json: @binary
-//       else
-//         render json: {error: true, message: "Can't vote twice!"}
-//       end
-//     else
-//       render json: {error: true, }
-//     end
-//   end
+app.post('/binaries', (req, res) => {
+  let body = req.body;
+  db.one('SELECT * FROM users WHERE id = $1', [body.id])
+  .then( user => {
+    db.one(
+      'INSERT INTO binaries(user_id, expiration, votesA, votesB, choiceA, choiceB, name, content, active, username) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *',
+      [
+        user.id,
+        calculateTime(body.type, body.number),
+        1,
+        1,
+        body.choiceA,
+        body.choiceB,
+        body.name,
+        body.content,
+        true,
+        user.username
+      ]
+    )
+    .then( binary => res.json(binary) )
+    .catch( error => res.json({ error: true, message: "Could not create binary", }));
+  })
+  .catch( error => res.json(invalid));
+})
 
-//   def create
-//     @params = JSON.load request.body
-//     @user = User.find(@params["id"].to_i)
-//     @binary = @user.binaries.new
-//     @binary.expiration = calculateTime(@params["type"], @params["number"])
-//     @binary.votesA = 1
-//     @binary.votesB = 1
-//     @binary.choiceA = @params["choiceA"]
-//     @binary.choiceB = @params["choiceB"]
-//     @binary.name = @params["name"]
-//     @binary.content = @params["content"]
-//     @binary.active = true
-//     @binary.username = @user.username
-//     @binary.save
-//     render json: @binary
-//   end
-
-//   def calculateTime(type,number)
-//     case type
-//       when "hours"
-//         return number.hours.to_i + Time.now.to_i
-//       when "days"
-//         return number.days.to_i + Time.now.to_i
-//       when "minutes"
-//         return number.minutes.to_i + Time.now.to_i
-//     end
-//   end
+function calculateTime(type = days, number = 1) {
+  let now = Math.floor(Date.now() / 1000);
+  let num = parseInt(number, 10);
+  const MINUTE = 60;
+  const HOUR = 60 * MINUTE;
+  const DAY = 24 * HOUR;
+  switch (type) {
+    case 'minutes':
+      return num * MINUTE + now;
+    case 'hours':
+      return num * HOUR + now;
+    case 'days':
+      return num * DAY + now;
+    default:
+      return DAY + now;
+  }
+}
 
 app.listen(PORT, () => console.log(`Listening on : ${PORT}`));
