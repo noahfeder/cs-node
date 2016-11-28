@@ -7,15 +7,15 @@ const db = pgp('postgres://stavro510@localhost:5432/cs-server_development');
 
 const invalid = {
   error: true,
-  message: "Invalid username/password",
+  message: "Invalid username/password.",
 };
 const valid = {
   error: false,
-  message: "Success",
+  message: "Success.",
 };
 const noRecord = {
   error: true,
-  message: "No record found,",
+  message: "No record found.",
 };
 
 function getData(body) {
@@ -85,8 +85,9 @@ app.patch('/binaries/:id', (req, res) => {
 });
 
 app.post('/binaries', (req, res) => {
-  let body = req.body;
-  db.one('SELECT * FROM users WHERE id = $1', [body.id])
+  console.log('req:\n', req);
+  console.log('res:\n', res);
+  db.one('SELECT * FROM users WHERE id = $1', [req.body.id])
   .then( user => {
     db.one(
       'INSERT INTO binaries(user_id, expiration, votesA, votesB, choiceA, choiceB, name, content, active, username) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *',
@@ -109,7 +110,7 @@ app.post('/binaries', (req, res) => {
   .catch( error => res.json(invalid));
 })
 
-function calculateTime(type = days, number = 1) {
+function calculateTime(type = 'days', number = 1) {
   let now = Math.floor(Date.now() / 1000);
   let num = parseInt(number, 10);
   const MINUTE = 60;
@@ -127,4 +128,9 @@ function calculateTime(type = days, number = 1) {
   }
 }
 
+app.get('/', (req, res) => {
+  db.many('SELECT * FROM binaries WHERE expiration >= $1', [Math.floor(Date.now() / 1000)])
+  .catch( error => res.json([]))
+  .then( data => res.json(data) );
+});
 app.listen(PORT, () => console.log(`Listening on : ${PORT}`));
